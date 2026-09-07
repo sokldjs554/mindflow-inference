@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mindflow
+      POSTGRES_PASSWORD: local-demo-only
+      POSTGRES_DB: mindflow
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mindflow -d mindflow"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    environment: &backend_env
+      DATABASE_URL: postgresql+asyncpg://mindflow:local-demo-only@postgres:5432/mindflow
+      REDIS_URL: redis://redis:6379/0
+      API_KEY: ${API_KEY:-}
+      CORS_ORIGINS: '["http://localhost:8000","http://127.0.0.1:8000"]'
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build: .
+    environment: *backend_env
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  worker:
+    build: .
+    environment: *backend_env
+    command: ["python", "-m", "app.worker"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+volumes:
+  postgres_data:
+  redis_data:
