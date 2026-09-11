@@ -27,7 +27,7 @@ from app.models import (
     Utterance,
     ValidationResult,
 )
-from app.schemas import InferenceCreate, ReviewInput, TranscriptInput
+from app.schemas import ClinicalSupport, InferenceCreate, ReviewInput, TranscriptInput
 
 
 def digest(value: Any) -> str:
@@ -272,6 +272,39 @@ async def result(db: AsyncSession, run_id: uuid.UUID) -> dict[str, Any]:
                 "reason": validation.reason,
             }
         )
+    clinical = None
+    stored_clinical = run.provider_metadata.get("clinical_support")
+    if stored_clinical is not None:
+        clinical = ClinicalSupport.model_validate(stored_clinical).model_dump(mode="json")
+        clinical.update(
+            run_id=str(run.id),
+            timestamp=run.completed_at.isoformat(),
+            review_status="REQUIRES_CLINICIAN_REVIEW"
+            if note.status == "REVIEW_REQUIRED"
+            else note.status,
+        )
+        for item in clinical["items"]:
+            if any(live.get(s, {}).get("superseded_by") for s in item["evidence"]):
+                item["current_validation"] = "STALE_EVIDENCE"
+        last_review = await db.scalar(
+            select(ReviewAction)
+            .where(ReviewAction.note_id == note.id)
+            .order_by(ReviewAction.created_at.desc())
+            .limit(1)
+        )
+        if last_review and note.status != "REVIEW_REQUIRED":
+            clinical.update(
+                reviewer=last_review.reviewer,
+                reviewed_at=note.reviewed_at.isoformat() if note.reviewed_at else None,
+            )
+    providers = run.provider_metadata.get("providers", {})
+    if providers.get("llm"):
+        model_identifier = providers["llm"]["identifier"]
+    else:
+        # Legacy runs predate provider snapshots; use their existing catalog FK.
+        model = await db.get(ModelVersion, run.model_version)
+        assert model is not None
+        model_identifier = model.identifier
     return {
         "run_id": str(run.id),
         "job_id": str(run.job_id),
@@ -279,7 +312,7 @@ async def result(db: AsyncSession, run_id: uuid.UUID) -> dict[str, Any]:
         "status": note.status,
         "statements": statements,
         "trace": {
-            "model_identifier": "deterministic-mock",
+            "model_identifier": model_identifier,
             "model_version": run.model_version,
             "prompt_version": run.prompt_version,
             "schema_version": run.schema_version,
@@ -293,6 +326,7 @@ async def result(db: AsyncSession, run_id: uuid.UUID) -> dict[str, Any]:
         },
         "validation_summary": run.validation_summary,
         "source": run.redacted_snapshot,
+        "clinical_support": clinical,
     }
 
 
@@ -314,6 +348,13 @@ async def review(
         s["current_validation"] != "SUPPORTED" for s in output["statements"]
     ):
         raise DomainError("UNSAFE_APPROVAL", "All statements must be supported by active evidence")
+    clinical = output.get("clinical_support")
+    if (
+        data.action == "approve"
+        and clinical
+        and any(item["current_validation"] != "SUPPORTED" for item in clinical["items"])
+    ):
+        raise DomainError("UNSAFE_APPROVAL", "Clinical support requires active grounded evidence")
     note.status = "APPROVED" if data.action == "approve" else "REJECTED"
     note.reviewed_at = datetime.now(UTC)
     db.add(ReviewAction(note_id=note.id, **data.model_dump()))
@@ -329,8 +370,8 @@ async def review(
     assert job is not None
     job.state = "COMPLETED"
     db.add(InferenceEvent(job_id=job.id, state="COMPLETED", progress=100))
-    output["status"] = note.status
-    return output
+    await db.flush()
+    return await result(db, run_id)
 
 
 def encode_cursor(created: datetime, ident: uuid.UUID) -> str:

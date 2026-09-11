@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: mindflow
       POSTGRES_PASSWORD: local-demo-only
       POSTGRES_DB: mindflow
-    ports: ["127.0.0.1:5432:5432"]
+    ports: ["127.0.0.1:15432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mindflow -d mindflow"]
@@ -46,7 +46,10 @@ services:
       retries: 5
   worker:
     build: .
-    environment: *backend_env
+    environment:
+      <<: *backend_env
+      WORKER_METRICS_HOST: 0.0.0.0
+    ports: ["127.0.0.1:9000:9000"]
     command: ["python", "-m", "app.worker"]
     stop_grace_period: 30s
     depends_on:

@@ -3,26 +3,43 @@
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas import EvidenceStatus, Statement
 
 Transcript = list[dict[str, Any]]
 
 
-class LLMProvider(Protocol):
+class ProviderMetadata(BaseModel):
+    """Public, immutable identifiers only; never credentials, inputs or endpoints."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    identifier: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    version: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    mode: Literal["mock", "deterministic", "custom"]
+    deterministic: bool
+
+
+class IdentifiedProvider(Protocol):
+    @property
+    def metadata(self) -> ProviderMetadata: ...
+
+
+class LLMProvider(IdentifiedProvider, Protocol):
     async def generate(self, transcript: Transcript, prompt: str, model: str) -> dict[str, Any]: ...
 
 
-class STTProvider(Protocol):
+class STTProvider(IdentifiedProvider, Protocol):
     async def transcribe(self, audio: bytes) -> Transcript: ...
 
 
-class RedactionProvider(Protocol):
+class RedactionProvider(IdentifiedProvider, Protocol):
     def redact(self, transcript: Transcript) -> "RedactedInput": ...
 
 
-class EvidenceValidationProvider(Protocol):
+class EvidenceValidationProvider(IdentifiedProvider, Protocol):
     def validate(
         self, statement: Statement, transcript: Transcript
     ) -> tuple[EvidenceStatus, str]: ...
@@ -35,6 +52,13 @@ class RedactedInput:
 
 
 class DeterministicRedactor:
+    metadata = ProviderMetadata(
+        identifier="deterministic-regex",
+        version="regex-v1",
+        mode="deterministic",
+        deterministic=True,
+    )
+
     patterns = [
         ("EMAIL", r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
         ("PHONE", r"(?<!\d)01[016789][- ]?\d{3,4}[- ]?\d{4}(?!\d)"),
@@ -67,6 +91,10 @@ class DeterministicRedactor:
 
 
 class MockSTTProvider:
+    metadata = ProviderMetadata(
+        identifier="fixed-synthetic-stt", version="1", mode="mock", deterministic=True
+    )
+
     async def transcribe(self, audio: bytes) -> Transcript:
         # Audio validation happens at ingestion. This is a fixed synthetic fixture, not recognition.
         return [
@@ -80,6 +108,10 @@ class MockSTTProvider:
 
 
 class MockLLMProvider:
+    metadata = ProviderMetadata(
+        identifier="deterministic-mock", version="1", mode="mock", deterministic=True
+    )
+
     async def generate(self, transcript: Transcript, prompt: str, model: str) -> dict[str, Any]:
         await asyncio.sleep(0.02)
         active_only = "ACTIVE_ONLY" in prompt
@@ -99,6 +131,13 @@ class MockLLMProvider:
 
 class DeterministicEvidenceValidator:
     """Conservative exact-match baseline; NOT semantic entailment or clinical validation."""
+
+    metadata = ProviderMetadata(
+        identifier="deterministic-evidence",
+        version="exact-duration-v1",
+        mode="deterministic",
+        deterministic=True,
+    )
 
     @staticmethod
     def hours(value: str) -> set[str]:

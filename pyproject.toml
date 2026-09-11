@@ -10,7 +10,7 @@ dependencies = [
   "python-multipart>=0.0.20,<1", "prometheus-client>=0.21,<1",
 ]
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9", "pytest-asyncio>=0.25,<1", "httpx>=0.28,<1", "ruff>=0.11,<1", "mypy>=1.15,<2", "websockets>=14,<16", "pyyaml>=6,<7", "types-PyYAML>=6,<7"]
+dev = ["pytest>=8.3,<9", "pytest-asyncio>=0.25,<1", "httpx>=0.28,<1", "ruff>=0.11,<1", "mypy>=1.15,<2", "websockets>=14,<16"]
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"

@@ -197,7 +197,9 @@ async def websocket(websocket: WebSocket, job_id: uuid.UUID) -> None:
     if settings().api_key:
         try:
             auth = await asyncio.wait_for(websocket.receive_json(), timeout=5)
-            if not secrets.compare_digest(str(auth.get("api_key", "")), settings().api_key):
+            if not isinstance(auth, dict) or not secrets.compare_digest(
+                str(auth.get("api_key", "")), settings().api_key
+            ):
                 await websocket.close(code=1008)
                 return
         except (TimeoutError, ValueError, WebSocketDisconnect):

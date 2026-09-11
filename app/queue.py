@@ -1,9 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.config import settings
 from app.db import SessionFactory
@@ -38,8 +38,12 @@ async def dispatch(redis: Redis) -> None:
                 select(JobOutbox)
                 .join(InferenceJob, InferenceJob.id == JobOutbox.job_id)
                 .where(
-                    JobOutbox.published_at.is_(None),
+                    or_(
+                        JobOutbox.published_at.is_(None),
+                        JobOutbox.published_at < datetime.now(UTC) - timedelta(seconds=30),
+                    ),
                     InferenceJob.next_attempt_at <= datetime.now(UTC),
+                    InferenceJob.state.not_in(["REVIEW_REQUIRED", "COMPLETED", "FAILED"]),
                 )
                 .with_for_update(skip_locked=True, of=JobOutbox)
                 .limit(100)

@@ -92,6 +92,156 @@ class JobView(BaseModel):
     completed_at: datetime | None
 
 
-class Page(BaseModel):
-    items: list[dict[str, Any]]
+class Page[T](BaseModel):
+    items: list[T]
     next_cursor: str | None = None
+
+
+class SourceUtterance(BaseModel):
+    sequence: int
+    speaker: Literal["client", "interviewer"]
+    text: str
+    superseded_by: int | None
+
+
+class SessionDetail(SessionView):
+    utterances: list[SourceUtterance]
+
+
+class TranscriptView(BaseModel):
+    utterances: list[SourceUtterance]
+
+
+class ValidatedStatement(BaseModel):
+    id: uuid.UUID
+    kind: Literal["subjective", "objective", "plan"]
+    text: str
+    evidence: list[int]
+    validation: EvidenceStatus
+    current_validation: EvidenceStatus
+    reason: str
+
+
+class ValidationSummary(BaseModel):
+    evidence_coverage: float
+    unsupported_count: int
+    contradiction_count: int
+    stale_count: int
+    partial_count: int
+    schema_validity: bool
+    statement_count: int
+
+
+class InferenceTrace(BaseModel):
+    model_identifier: str
+    model_version: str
+    prompt_version: str
+    schema_version: str
+    input_hash: str
+    redacted_input_hash: str
+    started_at: datetime
+    completed_at: datetime
+    latency_ms: float
+    retry_count: int
+    provider_metadata: dict[str, Any]
+
+
+class EvidenceView(BaseModel):
+    statements: list[ValidatedStatement]
+    source: list[SourceUtterance]
+
+
+class ClinicalItem(StrictModel):
+    id: str
+    kind: Literal[
+        "observed_signal",
+        "condition_candidate",
+        "risk_signal",
+        "missing_information",
+        "follow_up_question",
+        "next_assessment",
+        "recommendation",
+    ]
+    text: str
+    evidence: list[Annotated[int, Field(gt=0, strict=True)]]
+    validation: EvidenceStatus = EvidenceStatus.UNSUPPORTED
+    current_validation: EvidenceStatus = EvidenceStatus.UNSUPPORTED
+    reason: str = "Not validated"
+    clinical_status: Literal["REQUIRES_CLINICIAN_REVIEW"] = "REQUIRES_CLINICIAN_REVIEW"
+
+
+class ClinicalSupport(StrictModel):
+    rule_version: str
+    provider: Literal["deterministic-clinical-rules"] = "deterministic-clinical-rules"
+    model_identifier: Literal["clinical-demo-v1"] = "clinical-demo-v1"
+    validation_scope: str = "Rule applicability and source grounding only; not clinical validity"
+    items: list[ClinicalItem]
+    run_id: uuid.UUID | None = None
+    timestamp: datetime | None = None
+    reviewer: str | None = None
+    reviewed_at: datetime | None = None
+    review_status: Literal["REQUIRES_CLINICIAN_REVIEW", "APPROVED", "REJECTED"] = (
+        "REQUIRES_CLINICIAN_REVIEW"
+    )
+    stages: list[Literal["GENERATED", "EVIDENCE_VALIDATED", "REQUIRES_CLINICIAN_REVIEW"]] = [
+        "GENERATED",
+        "EVIDENCE_VALIDATED",
+        "REQUIRES_CLINICIAN_REVIEW",
+    ]
+
+
+class ResultView(EvidenceView):
+    run_id: uuid.UUID
+    job_id: uuid.UUID
+    note_id: uuid.UUID
+    status: Literal["REVIEW_REQUIRED", "APPROVED", "REJECTED"]
+    trace: InferenceTrace
+    validation_summary: ValidationSummary
+    clinical_support: ClinicalSupport | None = None
+
+
+class ComparisonMetrics(ValidationSummary):
+    latency_ms: float
+    prompt_version: str
+    model_version: str
+
+
+class ComparisonView(BaseModel):
+    original: ComparisonMetrics
+    replay: ComparisonMetrics
+    delta: dict[str, float]
+
+
+class RunListItem(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    job_id: uuid.UUID
+    prompt_version: str
+    model_version: str
+
+
+class AudioView(BaseModel):
+    audio_id: uuid.UUID
+    stt_mode: str
+
+
+class AuditDetails(BaseModel):
+    count: int | None = None
+    replay: bool | None = None
+    reviewer: str | None = None
+
+
+class AuditView(BaseModel):
+    action: str
+    created_at: datetime
+    details: AuditDetails
+
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    error: ErrorDetail

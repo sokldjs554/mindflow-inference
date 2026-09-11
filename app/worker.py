@@ -5,12 +5,17 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from prometheus_client import start_http_server
 from pydantic import ValidationError
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.clinical import generate as generate_clinical
 from app.config import settings
 from app.db import SessionFactory, engine
+from app.errors import DomainError
 from app.models import (
     AudioAsset,
     EvidenceLink,
@@ -33,14 +38,16 @@ from app.observability import (
 from app.providers import (
     DeterministicEvidenceValidator,
     DeterministicRedactor,
+    EvidenceValidationProvider,
     LLMProvider,
     MockLLMProvider,
     MockSTTProvider,
+    RedactionProvider,
     STTProvider,
 )
 from app.queue import dispatch, dispatch_events, ensure_group, job_stream, redis_client
-from app.schemas import NoteOutput
-from app.services import digest
+from app.schemas import NoteOutput, TranscriptInput
+from app.services import append_transcript, digest, require_session, transcript
 
 TERMINAL = {"REVIEW_REQUIRED", "COMPLETED", "FAILED"}
 PROGRESS = {
@@ -56,12 +63,20 @@ PROGRESS = {
 
 class Worker:
     def __init__(
-        self, redis: Redis, llm: LLMProvider | None = None, stt: STTProvider | None = None
+        self,
+        redis: Redis,
+        llm: LLMProvider | None = None,
+        stt: STTProvider | None = None,
+        redactor: RedactionProvider | None = None,
+        validator: EvidenceValidationProvider | None = None,
     ):
         self.redis = redis
         self.llm = llm or MockLLMProvider()
         self.stt = stt or MockSTTProvider()
+        self.redactor = redactor or DeterministicRedactor()
+        self.validator = validator or DeterministicEvidenceValidator()
         self.consumer = str(uuid.uuid4())
+        self.recovery_cursor = "0-0"
 
     async def transition(self, job_id: uuid.UUID, state: str) -> None:
         async with SessionFactory() as db, db.begin():
@@ -71,7 +86,7 @@ class Worker:
             db.add(InferenceEvent(job_id=job_id, state=state, progress=job.progress))
             log("job_transition", job_id=job_id, correlation_id=job.correlation_id, state=state)
         # DB state survives a Redis outage. Dispatcher retries unsent events later.
-        with contextlib.suppress(ConnectionError, OSError):
+        with contextlib.suppress(RedisError, ConnectionError, OSError):
             await dispatch_events(self.redis)
 
     async def process(self, job_id: uuid.UUID) -> bool:
@@ -104,18 +119,25 @@ class Worker:
                     "ATTEMPTS_EXHAUSTED",
                     datetime.now(UTC),
                 )
+                job.progress = 100
+                JOB_FAILURES.labels("ATTEMPTS_EXHAUSTED").inc()
                 db.add(InferenceEvent(job_id=job.id, state="FAILED", progress=100))
                 return True
             job.attempts += 1
             job.started_at = job.started_at or datetime.now(UTC)
             snapshot, audio_id = job.input_snapshot, job.audio_id
+            stt_metadata = job.stt_metadata
             model_version, prompt_version = job.model_version, job.prompt_version
             attempts, started_at, session_id = job.attempts, job.started_at, job.session_id
+            correlation_id = job.correlation_id
             prompt = await db.get(PromptVersion, prompt_version)
             assert prompt is not None
             template = prompt.template
         start = time.perf_counter()
         try:
+            llm_metadata = self.llm.metadata.model_dump()
+            redactor_metadata = self.redactor.metadata.model_dump()
+            validator_metadata = self.validator.metadata.model_dump()
             await self.transition(job_id, "INGESTING")
             if audio_id and not snapshot:
                 await self.transition(job_id, "TRANSCRIBING")
@@ -123,15 +145,32 @@ class Worker:
                     audio = await db.get(AudioAsset, audio_id)
                     assert audio is not None
                     audio_bytes = audio.data
+                stt_metadata = self.stt.metadata.model_dump()
                 snapshot = await asyncio.wait_for(
                     self.stt.transcribe(audio_bytes), settings().provider_timeout_seconds
                 )
+                parsed = TranscriptInput.model_validate(
+                    {
+                        "utterances": [
+                            {k: u[k] for k in ("sequence", "speaker", "text")} for u in snapshot
+                        ]
+                    }
+                )
                 async with SessionFactory() as db, db.begin():
+                    await require_session(db, session_id, lock=True)
+                    if await transcript(db, session_id):
+                        raise DomainError(
+                            "INPUT_CONFLICT", "Transcript changed during audio ingestion"
+                        )
+                    await append_transcript(db, session_id, parsed, correlation_id)
+                    await db.flush()
+                    snapshot = await transcript(db, session_id)
                     job = await db.get(InferenceJob, job_id)
                     assert job is not None
                     job.input_snapshot = snapshot
+                    job.stt_metadata = stt_metadata
             await self.transition(job_id, "REDACTING")
-            redacted = DeterministicRedactor().redact(snapshot).transcript
+            redacted = self.redactor.redact(snapshot).transcript
             await self.transition(job_id, "GENERATING")
             raw = await asyncio.wait_for(
                 self.llm.generate(redacted, template, model_version),
@@ -139,9 +178,8 @@ class Worker:
             )
             output = NoteOutput.model_validate(raw)
             await self.transition(job_id, "VALIDATING")
-            validator = DeterministicEvidenceValidator()
             validated = [
-                (kind, pos, statement, *validator.validate(statement, redacted))
+                (kind, pos, statement, *self.validator.validate(statement, redacted))
                 for kind in ("subjective", "objective", "plan")
                 for pos, statement in enumerate(getattr(output, kind))
             ]
@@ -176,12 +214,23 @@ class Worker:
                     retry_count=attempts - 1,
                     validation_summary=summary,
                     provider_metadata={
-                        "mode": "mock",
-                        "deterministic": True,
-                        "redactor": "regex-v1",
-                        "validator": "exact-duration-v1",
+                        "mode": llm_metadata["mode"],
+                        "deterministic": all(
+                            m["deterministic"]
+                            for m in [llm_metadata, redactor_metadata, validator_metadata]
+                            + ([stt_metadata] if stt_metadata else [])
+                        ),
+                        "redactor": redactor_metadata["version"],
+                        "validator": validator_metadata["version"],
+                        "providers": {
+                            "llm": llm_metadata,
+                            "stt": stt_metadata,
+                            "redaction": redactor_metadata,
+                            "evidence_validation": validator_metadata,
+                        },
+                        "clinical_support": generate_clinical(redacted).model_dump(mode="json"),
                         "prompt_hash": digest(template),
-                        "audio_fixture": bool(audio_id),
+                        "audio_fixture": bool(stt_metadata and stt_metadata["mode"] == "mock"),
                     },
                 )
                 db.add(run)
@@ -214,6 +263,12 @@ class Worker:
                     correlation_id=job.correlation_id,
                 )
             INFERENCE_LATENCY.observe(latency / 1000)
+            return True
+        except SQLAlchemyError:
+            log("job_storage_unavailable", job_id=job_id, code="DATABASE_UNAVAILABLE")
+            return False
+        except DomainError as exc:
+            await self.failure(job_id, exc.code, retryable=False)
             return True
         except Exception as exc:
             # Never persist provider exception text: it can contain input or credentials.
@@ -256,8 +311,14 @@ class Worker:
         await ensure_group(self.redis)
         await dispatch(self.redis)
         recovered = await self.redis.xautoclaim(
-            job_stream(), "workers", self.consumer, min_idle_time=2000, start_id="0-0", count=10
+            job_stream(),
+            "workers",
+            self.consumer,
+            min_idle_time=2000,
+            start_id=self.recovery_cursor,
+            count=10,
         )
+        self.recovery_cursor = recovered[0]
         messages = recovered[1]
         if not messages:
             batches = await self.redis.xreadgroup(
@@ -269,9 +330,12 @@ class Worker:
                 job_id = uuid.UUID(fields["job_id"])
             except (KeyError, ValueError):
                 await self.redis.xack(job_stream(), "workers", message_id)
+                await self.redis.xdel(job_stream(), message_id)
                 continue
             if await self.process(job_id):
                 await self.redis.xack(job_stream(), "workers", message_id)
+                # Single consumer group: delete acknowledged entries, never trim pending jobs.
+                await self.redis.xdel(job_stream(), message_id)
         await dispatch_events(self.redis)
         return len(messages)
 
@@ -284,6 +348,9 @@ async def main() -> None:
             loop.add_signal_handler(sig, stop.set)
     redis = redis_client()
     worker = Worker(redis)
+    metrics_server, _ = start_http_server(
+        settings().worker_metrics_port, addr=settings().worker_metrics_host
+    )
     log("worker_started")
     try:
         while not stop.is_set():
@@ -293,6 +360,7 @@ async def main() -> None:
                 log("worker_infrastructure_error", code="DEPENDENCY_UNAVAILABLE")
                 await asyncio.sleep(1)
     finally:
+        await asyncio.to_thread(metrics_server.shutdown)
         await redis.aclose()
         await engine.dispose()
 

@@ -83,6 +83,7 @@ class InferenceJob(Entity, Base):
     progress: Mapped[int] = mapped_column(default=0)
     input_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     audio_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("audio_assets.id"))
+    stt_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     prompt_version: Mapped[str] = mapped_column(ForeignKey("prompt_versions.version"))
     model_version: Mapped[str] = mapped_column(ForeignKey("model_versions.version"))
     replay_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

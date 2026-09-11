@@ -21,4 +21,8 @@ API and worker use the same image with different commands. A one-off migration t
 
 Sizing begins with one worker and measured connection budget: each active worker can use two DB connections (advisory lock + transactions). Scale API independently; test multi-worker dispatch under failure before scaling. ElastiCache must support Streams consumer groups and XAUTOCLAIM. Use persistence and noeviction for durable queue intent, while DB outbox remains authoritative.
 
-Outstanding production changes: OIDC/RBAC and tenant ownership, retention/deletion and audit policy, complete redaction evaluation, raw audio boundary assessment, S3 adapter (current implementation stores bounded WAV in PostgreSQL), metrics aggregation/exporter, queue retention, disaster-recovery tests and load testing. Review aliases are not authenticated reviewer identities. Never expose the keyless local demo publicly.
+The worker exports Prometheus metrics on port 9000; scrape each worker task separately
+and aggregate in the monitoring system. Restrict this port to the metrics collector.
+Acknowledged job messages are deleted; durable DB event retention remains a deployment concern.
+
+Outstanding production changes: OIDC/RBAC and tenant ownership, retention/deletion and audit policy, complete redaction evaluation, raw audio boundary assessment, S3 adapter (current implementation stores bounded WAV in PostgreSQL), metrics collector configuration, disaster-recovery tests and load testing. Review aliases are not authenticated reviewer identities. Never expose the keyless local demo publicly.

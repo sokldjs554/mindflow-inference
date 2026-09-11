@@ -1,0 +1,62 @@
+{
+  "measured_at": "2026-09-09T09:06:47.817312+00:00",
+  "environment": {
+    "server_description": "local API + worker, PostgreSQL 16.4, Redis 8.10.1",
+    "client_platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.14"
+  },
+  "configuration": {
+    "jobs": 6,
+    "concurrency": 2,
+    "job_timeout_seconds": 30.0,
+    "websocket": true,
+    "synthetic_only": true
+  },
+  "duration_seconds": 1.3233546000001297,
+  "success_count": 6,
+  "error_count": 0,
+  "errors": {},
+  "created_job_count": 6,
+  "http_request_count": 36,
+  "http_status_counts": {
+    "201": 12,
+    "202": 6,
+    "200": 18
+  },
+  "http_latency": {
+    "count": 36,
+    "p50_ms": 11.792499999955908,
+    "p95_ms": 50.6434999999783,
+    "p99_ms": 69.31570000006104,
+    "max_ms": 69.31570000006104
+  },
+  "inference_completion_latency": {
+    "count": 6,
+    "p50_ms": 395.3037999999651,
+    "p95_ms": 630.0648000001274,
+    "p99_ms": 630.0648000001274,
+    "max_ms": 630.0648000001274
+  },
+  "workflow_latency": {
+    "count": 6,
+    "p50_ms": 501.7089999998916,
+    "p95_ms": 673.6392000000251,
+    "p99_ms": 673.6392000000251,
+    "max_ms": 673.6392000000251
+  },
+  "successful_workflows_per_second": 4.533932175094575,
+  "http_requests_per_second": 27.203593050567452,
+  "websocket": {
+    "opened": 6,
+    "peak_connections": 2,
+    "observed_states": {
+      "QUEUED": 12,
+      "INGESTING": 6,
+      "REDACTING": 6,
+      "GENERATING": 6,
+      "VALIDATING": 6,
+      "REVIEW_REQUIRED": 6
+    }
+  },
+  "method": "Finite closed-loop concurrency; six REST requests per successful workflow. Latency uses client wall clock; nearest-rank percentiles. Preflight excluded. Workflow ends after validated result, synthetic approval and COMPLETED job. No warm-up, retries by the client, or cleanup of persisted synthetic sessions."
+}

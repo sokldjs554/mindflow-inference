@@ -28,7 +28,7 @@ SCENARIOS: dict[str, list[dict[str, Any]]] = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--url", default="http://127.0.0.1:8000")
     args = parser.parse_args()
 
     def request(path: str, body: dict[str, Any] | None = None) -> Any:

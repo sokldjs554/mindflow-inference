@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     rate_limit: int = Field(default=120, ge=1)
     max_body_bytes: int = 5_500_000
     stream_prefix: str = "mindflow"
+    worker_metrics_port: int = Field(default=9000, ge=1024, le=65535)
+    worker_metrics_host: str = "127.0.0.1"
 
 
 @lru_cache

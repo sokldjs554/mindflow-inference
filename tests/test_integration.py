@@ -5,6 +5,7 @@ import os
 import sys
 import uuid
 import wave
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -14,7 +15,7 @@ from websockets.asyncio.client import connect
 
 from app.config import settings
 from app.db import SessionFactory
-from app.models import InferenceRun, Utterance
+from app.models import AudioAsset, InferenceJob, InferenceRun, JobOutbox, Utterance
 from app.providers import MockLLMProvider
 from app.queue import dispatch, ensure_group, event_stream, job_stream, redis_client
 from app.worker import Worker
@@ -158,6 +159,8 @@ async def test_concurrent_idempotency(client):
 
 
 class FailingProvider:
+    metadata = MockLLMProvider.metadata
+
     def __init__(self, mode):
         self.mode, self.calls = mode, 0
 
@@ -232,6 +235,76 @@ async def test_transaction_rollback_and_unique_constraint(client):
                 Utterance(session_id=uuid.UUID(sid), sequence=1, speaker="client", text="duplicate")
             )
             await db.flush()
+
+
+async def test_lost_redis_stream_republished_from_database(client):
+    _, jid = await submit(client)
+    redis = redis_client()
+    try:
+        await ensure_group(redis)
+        await dispatch(redis)
+        await redis.delete(job_stream())
+        async with SessionFactory() as db, db.begin():
+            outbox = await db.scalar(select(JobOutbox).where(JobOutbox.job_id == uuid.UUID(jid)))
+            outbox.published_at = datetime.now(UTC) - timedelta(seconds=31)
+        await Worker(redis).tick(block_ms=10)
+        assert (await client.get(f"/api/jobs/{jid}")).json()["state"] == "REVIEW_REQUIRED"
+        assert await redis.xlen(job_stream()) == 0
+        await dispatch(redis)
+        assert await redis.xlen(job_stream()) == 0  # Terminal jobs are not republished.
+    finally:
+        await redis.aclose()
+
+
+async def test_invalid_stt_output_does_not_persist_transcript(client):
+    class InvalidSTT:
+        metadata = MockLLMProvider.metadata
+
+        async def transcribe(self, audio):
+            return [{"sequence": 1, "speaker": "client", "text": ""}]
+
+    sid = (await client.post("/api/sessions", json={"title": "STT failure"})).json()["id"]
+    async with SessionFactory() as db, db.begin():
+        asset = AudioAsset(
+            session_id=uuid.UUID(sid),
+            content_type="audio/wav",
+            sha256="0" * 64,
+            data=b"synthetic fixture",
+        )
+        db.add(asset)
+        await db.flush()
+        aid = str(asset.id)
+    response = await client.post(
+        f"/api/sessions/{sid}/inferences",
+        json={"audio_id": aid},
+        headers={"Idempotency-Key": "invalid-stt"},
+    )
+    jid = response.json()["id"]
+    redis = redis_client()
+    try:
+        await Worker(redis, stt=InvalidSTT()).tick(block_ms=10)
+        job = (await client.get(f"/api/jobs/{jid}")).json()
+        assert job["state"] == "FAILED" and job["error_code"] == "SCHEMA_INVALID"
+        assert (await client.get(f"/api/sessions/{sid}")).json()["utterances"] == []
+        async with SessionFactory() as db:
+            assert (await db.get(InferenceJob, uuid.UUID(jid))).input_snapshot == []
+    finally:
+        await redis.aclose()
+
+
+async def test_rate_and_body_limits(client):
+    original_rate, original_body = settings().rate_limit, settings().max_body_bytes
+    try:
+        settings().rate_limit = 1
+        assert (await client.get("/api/sessions")).status_code == 200
+        assert (await client.get("/api/sessions")).status_code == 429
+        settings().rate_limit = original_rate
+        settings().max_body_bytes = 10
+        response = await client.post("/api/sessions", json={"title": "too long synthetic title"})
+        assert response.status_code == 413
+        assert response.json()["error"]["code"] == "BODY_TOO_LARGE"
+    finally:
+        settings().rate_limit, settings().max_body_bytes = original_rate, original_body
 
 
 async def test_provider_redaction_boundary(client):
