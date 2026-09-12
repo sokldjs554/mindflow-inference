@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Docker builds use the existing Dockerfile (pip install .), not buildCommand.
+services:
+  - type: web
+    name: mindflow-inference-web
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    preDeployCommand: python -m scripts.render_start migrate
+    dockerCommand: python -m scripts.render_start web
+    healthCheckPath: /ready
+    numInstances: 1
+    autoDeployTrigger: "off"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mindflow-inference-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: mindflow-inference-redis
+          property: connectionString
+      - key: API_KEY
+        value: ""
+      - key: STREAM_PREFIX
+        value: mindflow
+
+  - type: worker
+    name: mindflow-inference-worker
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m scripts.render_start worker
+    numInstances: 1
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mindflow-inference-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: mindflow-inference-redis
+          property: connectionString
+      - key: STREAM_PREFIX
+        value: mindflow
+
+  - type: keyvalue
+    name: mindflow-inference-redis
+    region: singapore
+    plan: 256mb
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+  - name: mindflow-inference-db
+    region: singapore
+    plan: 0.1c-256mb
+    diskSizeGB: 1
+    postgresMajorVersion: "16"
+    databaseName: mindflow
+    ipAllowList: []

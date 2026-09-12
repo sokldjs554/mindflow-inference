@@ -54,6 +54,13 @@ flowchart LR
 
 하나의 코드베이스, API 프로세스와 worker 프로세스. Redis는 실제 job 전달과 event 전달을 담당합니다. PostgreSQL이 상태의 source of truth이며 DB outbox가 publish 실패를 복구합니다.
 
+## Render deployment configuration
+
+Render용 [Blueprint](render.yaml)와 [배포 안내](docs/render-deployment.md)를 제공합니다.
+공개 Live Demo URL은 아직 검증되지 않았습니다. 현재 직접 입력/업로드가 원문을 저장하므로,
+공개 방문자의 개인정보 저장을 금지하는 요구사항을 충족하기 전에는 Blueprint를 적용하지 마세요.
+기존 [Demo Video](docs/demo.mp4)와 [GitHub source](https://github.com/sokldjs554/mindflow-inference)는 계속 이용할 수 있습니다.
+
 ## Docker quick start
 
 필수: Docker Engine/Desktop + Compose v2. 외부 AI API key는 필요 없습니다.
