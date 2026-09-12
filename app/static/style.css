@@ -58,6 +58,7 @@
 .review-side .panelhead{padding:14px 16px;flex-wrap:wrap}
 .review-side .input-body,.review-side .validation-body{padding:14px 16px}
 .review-side .input-body>label{margin-top:9px}
+label[hidden],button[hidden]{display:none!important}
 .review-side .subhead{padding:10px 16px}
 .review-side .audit-row{padding:10px 16px}
 .review-side .validation-counts strong{font-size:19px}

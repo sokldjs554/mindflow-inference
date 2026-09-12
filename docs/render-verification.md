@@ -1,5 +1,42 @@
 # Render 구성 검증 기록
 
+## PUBLIC DEMO MODE 검증 — 2026-09-13
+
+공개 입력 제한을 구현하고 로컬 Docker 환경에서 검증했습니다. 실제 Render 배포,
+공개 hostname/TLS 및 Live Demo URL은 아직 생성·검증하지 않았습니다.
+
+| 검증 | 결과 |
+|---|---|
+| `python -m pytest -q` | **85 passed**, skip 없음, 기존 Alembic 경고 2건 |
+| `ruff check app tests scripts` | 통과 |
+| `ruff format --check app tests scripts` | 30 files already formatted |
+| `mypy app scripts/render_start.py` | 16 source files 통과 |
+| `docker compose config --quiet` | 통과 |
+| `docker build -t mindflow-public-demo .` | 통과 |
+| `python -m alembic check` | No new upgrade operations detected |
+| Render 공식 JSON Schema 및 기존 구성 참조 검증 | 통과, 아래 기존 schema hash와 동일 |
+| Render CLI/API Blueprint 서버 측 검증 | 미실행 |
+| 서버 소유 Scenario A~E / 기존 JS fixture 일치 | 통과 |
+| E 근거/Clinical Review/승인/audit/Provenance | 통과 |
+| B STALE_EVIDENCE / 승인 409 / 거절 / note-v2 Replay·비교 | 통과 |
+| 임의 title/transcript/append/correction/upload 및 변조 scenario body | REST 차단 및 DB 미저장 확인 |
+| 임의 reviewer/reason | 고정 demo 값 저장 확인 |
+| 기존 자유 입력 기록의 새 추론/Replay | 공개 모드에서 차단 확인 |
+| PUBLIC_DEMO_MODE 기본 false / 환경변수 true | 통과, 기존 로컬 회귀 테스트 유지 |
+| Headless Edge 실제 UI | 자유 입력 숨김/비활성화, E 승인, B stale 승인 비활성화·거절·Replay 후 승인, page error 0 |
+
+별도 `mindflow_public_test` DB와 `mindflow-public-check` Redis namespace에서
+`scripts.render_start migrate/web/worker`를 실행했습니다. web/worker 모두
+`PUBLIC_DEMO_MODE=true`, 일반 `postgresql://` URL 및 web `PORT=10000`을 주입했습니다.
+`/ready` 200, 기존 E/B 검증을 서버 Scenario endpoint로 실행하여 E WebSocket progress
+6건, B/Replay 12건, 고정 demo reviewer와 Replay 후 승인을 확인했습니다.
+검증 스크립트와 컨테이너는 로컬 전용이며 실제 Render 서비스가 아닙니다.
+
+자동 삭제는 구현하지 않았습니다. 전용 DB 사용과 정기 초기화 절차는
+[배포 문서](render-deployment.md#공개-데모-입력-정책과-데이터-보존)에 있습니다.
+
+## 이전 배포 구성 검증
+
 검증일: 2026-09-12. **실제 Render 배포 및 공개 URL 검증은 미완료**입니다.
 모든 실행 데이터는 synthetic이며 외부 LLM API는 사용하지 않았습니다.
 

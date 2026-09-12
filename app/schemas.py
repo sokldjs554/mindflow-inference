@@ -14,6 +14,10 @@ class SessionCreate(StrictModel):
     title: str = Field(min_length=1, max_length=120)
 
 
+class DemoConfig(BaseModel):
+    public_demo_mode: bool
+
+
 class UtteranceInput(StrictModel):
     sequence: int = Field(gt=0, strict=True)
     speaker: Literal["client", "interviewer"] = "client"

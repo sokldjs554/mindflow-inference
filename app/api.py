@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import services
+from app import demo, services
+from app.config import settings
 from app.db import get_db
 from app.errors import DomainError
 from app.models import AudioAsset, AuditEvent, InferenceJob, InferenceRun, Session
@@ -16,6 +17,7 @@ from app.schemas import (
     AudioView,
     AuditView,
     ComparisonView,
+    DemoConfig,
     ErrorEnvelope,
     EvidenceView,
     InferenceCreate,
@@ -34,6 +36,7 @@ from app.schemas import (
 
 def error_responses(*codes: int) -> dict[int | str, dict[str, Any]]:
     descriptions = {
+        403: "PUBLIC_DEMO_RESTRICTED: only synthetic input is allowed.",
         401: "UNAUTHORIZED: a valid X-API-Key is required when configured.",
         404: "The requested session, job, run or audio resource does not exist.",
         409: "State, evidence approval, input or idempotency constraint conflict.",
@@ -46,7 +49,7 @@ def error_responses(*codes: int) -> dict[int | str, dict[str, Any]]:
     return {code: {"model": ErrorEnvelope, "description": descriptions[code]} for code in codes}
 
 
-router = APIRouter(prefix="/api", responses=error_responses(401, 413, 422, 429, 503))
+router = APIRouter(prefix="/api", responses=error_responses(401, 403, 413, 422, 429, 503))
 DB = Annotated[AsyncSession, Depends(get_db)]
 Key = Annotated[
     str,
@@ -62,6 +65,7 @@ Key = Annotated[
     description="Create a synthetic documentation session. No clinical decisions.",
 )
 async def create_session(body: SessionCreate, db: DB) -> Session:
+    demo.block_free_input()
     session = Session(title=body.title)
     db.add(session)
     await db.commit()
@@ -107,6 +111,7 @@ async def session_detail(session_id: uuid.UUID, db: DB) -> dict[str, Any]:
 async def submit_transcript(
     session_id: uuid.UUID, body: TranscriptInput, request: Request, db: DB
 ) -> dict[str, Any]:
+    demo.block_free_input()
     await services.append_transcript(db, session_id, body, request.state.correlation_id)
     await db.commit()
     return {"utterances": await services.transcript(db, session_id)}
@@ -123,6 +128,7 @@ async def submit_transcript(
 async def upload_audio(
     session_id: uuid.UUID, db: DB, file: Annotated[UploadFile, File()]
 ) -> dict[str, str]:
+    demo.block_free_input()
     await services.require_session(db, session_id)
     if file.content_type not in {"audio/wav", "audio/x-wav", "audio/wave"}:
         raise DomainError("UNSUPPORTED_AUDIO", "Only PCM WAV audio is accepted", 415)
@@ -249,7 +255,7 @@ async def evidence(run_id: uuid.UUID, db: DB) -> dict[str, Any]:
     description="Human gate: approve only fully supported active evidence, or reject.",
 )
 async def review(run_id: uuid.UUID, body: ReviewInput, request: Request, db: DB) -> dict[str, Any]:
-    value = await services.review(db, run_id, body, request.state.correlation_id)
+    value = await services.review(db, run_id, demo.safe_review(body), request.state.correlation_id)
     await db.commit()
     return value
 
@@ -315,3 +321,37 @@ async def audit(resource_id: uuid.UUID, db: DB) -> list[dict[str, Any]]:
         {"action": r.action, "created_at": r.created_at.isoformat(), "details": r.details}
         for r in rows
     ]
+
+
+@router.get(
+    "/demo/config",
+    tags=["Sessions"],
+    response_model=DemoConfig,
+    description="Read the public demo input policy used by the browser controls.",
+)
+async def demo_config() -> dict[str, bool]:
+    return {"public_demo_mode": settings().public_demo_mode}
+
+
+@router.post(
+    "/demo/scenarios/{code}",
+    response_model=SessionView,
+    status_code=201,
+    tags=["Sessions"],
+    description="Create a session from server-owned Scenario A-E. Request bodies are forbidden.",
+)
+async def demo_scenario(code: str, request: Request, db: DB) -> Session:
+    if code not in demo.SCENARIOS or await request.body():
+        demo.forbidden()
+    session = Session(title=f"예시 {code} · 가상 상담 기록")
+    db.add(session)
+    await db.flush()
+    await services.append_transcript(
+        db,
+        session.id,
+        TranscriptInput(utterances=demo.SCENARIOS[code]),
+        request.state.correlation_id,
+    )
+    await db.commit()
+    await db.refresh(session)
+    return session

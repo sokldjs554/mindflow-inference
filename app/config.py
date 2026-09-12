@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://mindflow:local-demo-only@127.0.0.1:5432/mindflow"
     redis_url: str = "redis://127.0.0.1:6379/0"
     api_key: str = ""
+    public_demo_mode: bool = False
     cors_origins: list[str] = ["http://localhost:8000"]
     provider_timeout_seconds: float = Field(default=5, gt=0, le=60)
     max_attempts: int = Field(default=3, ge=1, le=5)

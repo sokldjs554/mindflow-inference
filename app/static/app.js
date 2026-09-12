@@ -7,6 +7,7 @@ const scenarios = {
  C: [{sequence:1,speaker:'client',text:'최근에는 퇴근 후 집에서 쉬고 있어요.'}],
  D: [{sequence:1,speaker:'client',text:'홍길동 씨는 서울 영등포구에 거주합니다.'},{sequence:2,speaker:'client',text:'연락처는 010-1234-5678이고 이메일은 demo@example.com입니다.'}]
 };
+let publicDemo = true;
 let current = null, session = null, utterances = [], socket = null, job = null, busy = false;
 let sessionCursor = null, runCursor = null, lastRequest = null;
 let inspectedRun = null, auditRun = null;
@@ -36,6 +37,7 @@ function controls() {
  $('session-open').disabled=busy||!$('sessions').value;
  $('sessions-more').disabled=busy||!sessionCursor; $('runs-more').disabled=busy||!runCursor;
  $('job-resume').disabled=busy||!job;
+ if(publicDemo)for(const id of ['title','session-create','input','corrects','append','reviewer','reason'])$(id).disabled=true;
  demoGuide();
 }
 function demoGuide() {
@@ -266,8 +268,8 @@ async function health() {
  $('health-time').textContent='Checked '+new Date().toLocaleTimeString();$('health-refresh').disabled=false;
 }
 async function runScenario(code) {
- const created=await api('/sessions','POST',{title:`예시 ${code} · 가상 상담 기록`});await openSession(created.id);
- await api(`/sessions/${session.id}/transcript`,'POST',{utterances:scenarios[code]});await refreshSession();
+ const created=publicDemo?await api(`/demo/scenarios/${code}`,'POST'):await api('/sessions','POST',{title:`예시 ${code} · 가상 상담 기록`});await openSession(created.id);
+ if(!publicDemo)await api(`/sessions/${session.id}/transcript`,'POST',{utterances:scenarios[code]});await refreshSession();
  const next=await api(`/sessions/${session.id}/inferences`,'POST',{prompt_version:code==='B'?'note-v1':'note-v2',model_version:code==='C'?'mock-unsupported':'mock-v1'});await showFinished(await follow(next));
 }
 $('start').onclick=()=>act(()=>runScenario($('scenario').value));
@@ -299,3 +301,15 @@ document.querySelectorAll('a[href^="#"]').forEach(link=>link.addEventListener('c
  const target=document.getElementById(link.hash.slice(1));
  if(target?.tagName==='DETAILS')target.open=true;
 }));
+
+void api('/demo/config').then(config=>{
+ publicDemo=config.public_demo_mode;
+ for(const id of ['title','input','corrects','reviewer','reason'])$(id).disabled=publicDemo;
+ if(publicDemo){
+  const notice=el('p','공개 데모에서는 가상 예시 기록만 사용할 수 있습니다.','panel-copy');
+  $('advanced-settings').before(notice);
+  for(const id of ['title','input','corrects','reviewer','reason'])$(id).closest('label').hidden=true;
+  for(const id of ['session-create','append'])$(id).hidden=true;
+ }
+ controls();
+}).catch(showError);

@@ -84,7 +84,9 @@ async def boundary(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     request.state.request_id = safe_id(request.headers.get("x-request-id"))
-    request.state.correlation_id = safe_id(request.headers.get("x-correlation-id"))
+    request.state.correlation_id = safe_id(
+        None if settings().public_demo_mode else request.headers.get("x-correlation-id")
+    )
     start = time.perf_counter()
     try:
         if request.url.path.startswith("/api") or request.url.path == "/metrics":

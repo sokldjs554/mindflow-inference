@@ -9,6 +9,8 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import demo
+from app.config import settings
 from app.errors import DomainError
 from app.models import (
     AuditEvent,
@@ -169,6 +171,8 @@ async def create_job(
     correlation: str,
     replay: InferenceRun | None = None,
 ) -> InferenceJob:
+    if settings().public_demo_mode and data.audio_id:
+        demo.forbidden()
     # Session row serializes transcript snapshots and concurrent submissions for this session.
     await require_session(db, session_id, lock=True)
     request_hash = digest(
@@ -178,6 +182,7 @@ async def create_job(
             "replay_of": replay.id if replay else None,
         }
     )
+    key = demo.safe_key(key)
     previous = await db.get(IdempotencyKey, key)
     if previous:
         if previous.request_hash != request_hash:
@@ -191,9 +196,11 @@ async def create_job(
         original = await db.get(InferenceJob, replay.job_id)
         assert original is not None
         snapshot = original.input_snapshot
+        demo.validate_snapshot(snapshot)
         audio_id = None
     else:
         snapshot = await transcript(db, session_id)
+        demo.validate_snapshot(snapshot)
         audio_id = data.audio_id
         if audio_id:
             from app.models import AudioAsset
