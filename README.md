@@ -77,7 +77,11 @@ docker compose exec api python -m scripts.demo
 빠른 데모 가이드는 현재 화면의 처리·근거 확인·검토 상태에 맞춰 다음 행동을 안내합니다.
 이는 화면 탐색 안내이며 의료진 검토를 대신하거나 추가 승인 조건을 만들지 않습니다.
 
-![빠른 데모 가이드와 원문 근거](docs/demo-quick-start.png)
+[![빠른 데모 가이드와 원문 근거](docs/demo-quick-start.png)](docs/demo.mp4)
+
+[데모 영상 보기](docs/demo.mp4)
+
+가상 상담 기록을 이용해 근거 확인 · 임상 검토 지원 · 의료진 검토 · 검토 이력 · 재실행 흐름을 보여주는 데모입니다.
 
 ![임상 검토 지원과 의료진 검토를 함께 확인하는 화면](docs/demo-quick-review.png)
 
